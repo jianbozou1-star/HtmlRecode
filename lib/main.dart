@@ -34,6 +34,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   String? _error;
   int _tabIndex = 0;
   final Set<String> _expandedDays = {}; // 展开的天
+  bool _expandedInitialized = false; // 只在首次加载数据后自动展开最新一天
 
   @override
   void initState() {
@@ -259,9 +260,10 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     final sorted = List<IncomeRecord>.from(_records)
       ..sort((a, b) => a.date.compareTo(b.date));
     final days = _groupByDay();
-    // 默认展开最新的一天
-    if (_expandedDays.isEmpty && days.isNotEmpty) {
+    // 仅首次自动展开最新的一天
+    if (!_expandedInitialized && days.isNotEmpty) {
       _expandedDays.add(days.first.$1);
+      _expandedInitialized = true;
     }
 
     return RefreshIndicator(
