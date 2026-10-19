@@ -163,6 +163,12 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   Color _incomeColor(double v) =>
       v >= 0 ? Colors.red.shade700 : Colors.green.shade700;
 
+  /// 手机号脱敏：保留前 3 位和后 4 位，中间用 * 隐藏。
+  String _maskPhone(String phone) {
+    if (phone.length < 7) return '****';
+    return '${phone.substring(0, 3)}****${phone.substring(phone.length - 4)}';
+  }
+
   /// 总收益单元格样式：正数淡红底+深红字，负数淡绿底+深绿字。
   ({Color bg, Color fg}) _totalStyle(double v) => v >= 0
       ? (bg: Colors.red.shade50, fg: Colors.red.shade900)
@@ -174,7 +180,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
       appBar: AppBar(
         title: Text(_store.phone == null || _store.phone!.isEmpty
             ? '记事本'
-            : '记事本 · ${_store.phone}'),
+            : '记事本 · ${_maskPhone(_store.phone!)}'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
