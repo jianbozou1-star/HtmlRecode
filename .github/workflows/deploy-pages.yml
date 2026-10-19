@@ -23,7 +23,7 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      - run: flutter build web --release --base-href /my_first_app/
+      - run: flutter build web --release --base-href /HtmlRecode/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: build/web
