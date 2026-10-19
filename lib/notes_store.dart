@@ -11,14 +11,22 @@ class IncomeRecord {
   final String name; // 名称
   final DateTime date; // 时间
   final double dailyIncome; // 当日收益
+  final double nextDayIncome; // 第二日收益
 
-  IncomeRecord({required this.id, required this.name, required this.date, required this.dailyIncome});
+  IncomeRecord({
+    required this.id,
+    required this.name,
+    required this.date,
+    required this.dailyIncome,
+    this.nextDayIncome = 0,
+  });
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'date': date.toIso8601String(),
         'dailyIncome': dailyIncome,
+        'nextDayIncome': nextDayIncome,
       };
 
   static IncomeRecord fromJson(Map<String, dynamic> j) => IncomeRecord(
@@ -26,6 +34,7 @@ class IncomeRecord {
         name: j['name'] ?? '',
         date: DateTime.tryParse(j['date'] ?? '') ?? DateTime.now(),
         dailyIncome: (j['dailyIncome'] as num?)?.toDouble() ?? 0,
+        nextDayIncome: (j['nextDayIncome'] as num?)?.toDouble() ?? 0,
       );
 }
 

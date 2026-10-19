@@ -163,6 +163,11 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   Color _incomeColor(double v) =>
       v >= 0 ? Colors.red.shade700 : Colors.green.shade700;
 
+  /// 总收益单元格样式：正数淡红底+深红字，负数淡绿底+深绿字。
+  ({Color bg, Color fg}) _totalStyle(double v) => v >= 0
+      ? (bg: Colors.red.shade50, fg: Colors.red.shade900)
+      : (bg: Colors.green.shade50, fg: Colors.green.shade900);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -324,10 +329,11 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
           0: FlexColumnWidth(3),
           1: FlexColumnWidth(2),
           2: FlexColumnWidth(2),
+          3: FlexColumnWidth(2),
         },
         children: [
           TableRow(
-            children: ['名称', '当日收益', '总收益']
+            children: ['名称', '当日收益', '第二日收益', '总收益']
                 .map((h) => Padding(
                       padding: const EdgeInsets.all(8),
                       child: Text(h, style: headerStyle),
@@ -355,11 +361,23 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
                 _cell(
                   onTap: () => _openEditor(_recordAt(i)),
                   alignment: Alignment.centerRight,
-                  child: Text(_cumulativeAt(sorted, i).toStringAsFixed(2),
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: _incomeColor(_cumulativeAt(sorted, i)))),
+                  child: Text(
+                    _recordAt(i).nextDayIncome.toStringAsFixed(2),
+                    style: TextStyle(color: _incomeColor(_recordAt(i).nextDayIncome)),
+                  ),
                 ),
+                Builder(builder: (_) {
+                  final total = _cumulativeAt(sorted, i);
+                  final s = _totalStyle(total);
+                  return _cell(
+                    onTap: () => _openEditor(_recordAt(i)),
+                    alignment: Alignment.centerRight,
+                    background: s.bg,
+                    child: Text(total.toStringAsFixed(2),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, color: s.fg)),
+                  );
+                }),
               ],
             ),
         ],
@@ -381,6 +399,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     required Widget child,
     required VoidCallback onTap,
     Alignment alignment = Alignment.centerLeft,
+    Color? background,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -388,6 +407,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
         padding: const EdgeInsets.all(8),
         alignment: alignment,
         constraints: const BoxConstraints(minHeight: 44),
+        color: background,
         child: child,
       ),
     );
@@ -396,7 +416,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   // ==================== Tab 2：统计 ====================
 
   Widget _buildStatsTab() {
-    return _StatsView(records: _records, incomeColor: _incomeColor);
+    return _StatsView(records: _records, incomeColor: _incomeColor, totalStyle: _totalStyle);
   }
 }
 
@@ -404,8 +424,13 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
 class _StatsView extends StatefulWidget {
   final List<IncomeRecord> records;
   final Color Function(double) incomeColor;
+  final ({Color bg, Color fg}) Function(double) totalStyle;
 
-  const _StatsView({required this.records, required this.incomeColor});
+  const _StatsView({
+    required this.records,
+    required this.incomeColor,
+    required this.totalStyle,
+  });
 
   @override
   State<_StatsView> createState() => _StatsViewState();
@@ -473,6 +498,7 @@ class _StatsViewState extends State<_StatsView> {
           ),
           ...groups.map((g) {
             final (period, total, n) = g;
+            final s = widget.totalStyle(total);
             return Container(
               decoration: BoxDecoration(
                 border: Border(
@@ -485,12 +511,20 @@ class _StatsViewState extends State<_StatsView> {
                 Expanded(flex: 2, child: Text('$n', textAlign: TextAlign.center)),
                 Expanded(
                   flex: 3,
-                  child: Text(
-                    total.toStringAsFixed(2),
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: widget.incomeColor(total),
+                  child: Container(
+                    margin: const EdgeInsets.only(left: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: s.bg,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      total.toStringAsFixed(2),
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: s.fg,
+                      ),
                     ),
                   ),
                 ),
@@ -499,23 +533,32 @@ class _StatsViewState extends State<_StatsView> {
           }),
           const SizedBox(height: 12),
           // 全部合计
-          Row(
-            children: [
-              const Spacer(),
-              const Text('全部合计：',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-              Text(
-                widget.records.fold<double>(0, (s, r) => s + r.dailyIncome)
-                    .toStringAsFixed(2),
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 17,
-                  color: widget.incomeColor(
-                      widget.records.fold<double>(0, (s, r) => s + r.dailyIncome)),
-                ),
+          Builder(builder: (_) {
+            final grand = widget.records.fold<double>(0, (s, r) => s + r.dailyIncome);
+            final s = widget.totalStyle(grand);
+            return Container(
+              margin: const EdgeInsets.only(left: 100),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: s.bg,
+                borderRadius: BorderRadius.circular(4),
               ),
-            ],
-          ),
+              child: Row(
+                children: [
+                  Text('全部合计：',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: s.fg)),
+                  Text(
+                    grand.toStringAsFixed(2),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                      color: s.fg,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
         ],
       ],
     );
@@ -534,6 +577,7 @@ class RecordEditPage extends StatefulWidget {
 class _RecordEditPageState extends State<RecordEditPage> {
   late final TextEditingController _name;
   late final TextEditingController _income;
+  late final TextEditingController _nextIncome;
   late DateTime _date;
 
   @override
@@ -541,6 +585,8 @@ class _RecordEditPageState extends State<RecordEditPage> {
     super.initState();
     _name = TextEditingController(text: widget.record.name);
     _income = TextEditingController(text: widget.record.dailyIncome.toStringAsFixed(2));
+    _nextIncome =
+        TextEditingController(text: widget.record.nextDayIncome.toStringAsFixed(2));
     _date = widget.record.date;
   }
 
@@ -571,6 +617,8 @@ class _RecordEditPageState extends State<RecordEditPage> {
                     .showSnackBar(const SnackBar(content: Text('当日收益必须是数字')));
                 return;
               }
+              final nextIncome =
+                  double.tryParse(_nextIncome.text.trim()) ?? 0;
               Navigator.pop(
                 context,
                 EditResult(
@@ -579,6 +627,7 @@ class _RecordEditPageState extends State<RecordEditPage> {
                     name: _name.text.trim(),
                     date: _date,
                     dailyIncome: income,
+                    nextDayIncome: nextIncome,
                   ),
                 ),
               );
@@ -614,6 +663,15 @@ class _RecordEditPageState extends State<RecordEditPage> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
             decoration: const InputDecoration(
               labelText: '当日收益（可为负数）',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _nextIncome,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+            decoration: const InputDecoration(
+              labelText: '第二日收益（可为负数）',
               border: OutlineInputBorder(),
             ),
           ),
