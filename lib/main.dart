@@ -33,8 +33,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   bool _loading = true;
   String? _error;
   int _tabIndex = 0;
-  static const int _pageSize = 10;
-  int _shown = _pageSize;
+  final Set<String> _expandedDays = {}; // 展开的天
 
   @override
   void initState() {
@@ -214,96 +213,165 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
 
   // ==================== Tab 1：表格 ====================
 
+  /// 按天分组（天倒序，最新的天在最上面）。
+  /// 返回 [(日期字符串, 该天的记录列表(升序), 全局累计到该行)]。
+  List<(String, List<int>)> _groupByDay() {
+    final sorted = List<IncomeRecord>.from(_records)
+      ..sort((a, b) => a.date.compareTo(b.date));
+    // 全局逐行累计
+    double running = 0;
+    final cumulative = <String, double>{};
+    for (final r in sorted) {
+      running += r.dailyIncome;
+      cumulative[r.id] = running;
+    }
+    final dayKeys = <String>[];
+    final dayMap = <String, List<IncomeRecord>>{};
+    for (final r in sorted) {
+      final key =
+          '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')}';
+      dayMap.putIfAbsent(key, () => []).add(r);
+      if (!dayKeys.contains(key)) dayKeys.add(key);
+    }
+    final result = <(String, List<int>)>[];
+    for (final key in dayKeys.reversed) {
+      final idxs = dayMap[key]!.map((r) => sorted.indexOf(r)).toList();
+      result.add((key, idxs));
+    }
+    return result;
+  }
+
+  IncomeRecord _recordAt(int i) {
+    final sorted = List<IncomeRecord>.from(_records)
+      ..sort((a, b) => a.date.compareTo(b.date));
+    return sorted[i];
+  }
+
+  double _cumulativeAt(List<IncomeRecord> sorted, int index) {
+    double total = 0;
+    for (var i = 0; i <= index; i++) {
+      total += sorted[i].dailyIncome;
+    }
+    return total;
+  }
+
   Widget _buildTableTab() {
     final sorted = List<IncomeRecord>.from(_records)
       ..sort((a, b) => a.date.compareTo(b.date));
-    // 逐行累计总收益
-    double running = 0;
-    final cumulative = <double>[];
-    for (final r in sorted) {
-      running += r.dailyIncome;
-      cumulative.add(running);
+    final days = _groupByDay();
+    // 默认展开最新的一天
+    if (_expandedDays.isEmpty && days.isNotEmpty) {
+      _expandedDays.add(days.first.$1);
     }
-    final shownCount = _shown.clamp(0, sorted.length);
-    final shown = sorted.length <= _shown
-        ? sorted
-        : sorted.sublist(sorted.length - shownCount);
-    final offset = sorted.length - shown.length;
 
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
-          _buildTable(shown, cumulative, offset),
-          if (sorted.length > _shown)
-            TextButton(
-              onPressed: () => setState(() => _shown += _pageSize),
-              child: Text('显示更多（共 ${sorted.length} 条，当前显示最近 $shownCount 条）'),
+          if (days.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: Text('暂无记录，点右下角 + 添加一行')),
             ),
+          ...days.map((day) => _buildDaySection(sorted, day.$1, day.$2)),
         ],
       ),
     );
   }
 
-  /// xlsx 风格表格：全边框网格，点击单元格进入编辑页。
-  Widget _buildTable(List<IncomeRecord> shown, List<double> cumulative, int offset) {
-    const headerStyle = TextStyle(fontWeight: FontWeight.bold);
+  /// 一天的折叠区块：标题栏（日期+当日合计+展开箭头）+ 内嵌表格。
+  Widget _buildDaySection(
+      List<IncomeRecord> sorted, String day, List<int> idxs) {
     final borderColor = Theme.of(context).colorScheme.outlineVariant;
+    final dayTotal = idxs.fold<double>(
+        0, (sum, i) => sum + _recordAt(i).dailyIncome);
+    final expanded = _expandedDays.contains(day);
+    const headerStyle = TextStyle(fontWeight: FontWeight.bold);
 
-    TableRow headerRow() => TableRow(
-          decoration:
-              BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-          children: ['名称', '时间', '当日收益', '总收益']
-              .map((h) => Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(h, style: headerStyle),
-                  ))
-              .toList(),
-        );
+    final children = <Widget>[
+      // 天标题栏
+      InkWell(
+        onTap: () => setState(() {
+          expanded ? _expandedDays.remove(day) : _expandedDays.add(day);
+        }),
+        child: Container(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+            Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 20),
+            const SizedBox(width: 4),
+            Text(day, style: headerStyle),
+            const Spacer(),
+            Text('${idxs.length} 笔',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+            const SizedBox(width: 12),
+            Text(dayTotal.toStringAsFixed(2),
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, color: _incomeColor(dayTotal))),
+          ]),
+        ),
+      ),
+    ];
 
-    TableRow dataRow(IncomeRecord r, double total) => TableRow(
-          children: [
-            _cell(
-              onTap: () => _openEditor(r),
-              child: Text(r.name.isEmpty ? '-' : r.name, overflow: TextOverflow.ellipsis),
+    if (expanded) {
+      children.add(Table(
+        border: TableBorder.all(color: borderColor),
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        columnWidths: const {
+          0: FlexColumnWidth(3),
+          1: FlexColumnWidth(2),
+          2: FlexColumnWidth(2),
+        },
+        children: [
+          TableRow(
+            children: ['名称', '当日收益', '总收益']
+                .map((h) => Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(h, style: headerStyle),
+                    ))
+                .toList(),
+          ),
+          for (final i in idxs)
+            TableRow(
+              children: [
+                _cell(
+                  onTap: () => _openEditor(_recordAt(i)),
+                  child: Text(_recordAt(i).name.isEmpty
+                      ? '-'
+                      : _recordAt(i).name,
+                      overflow: TextOverflow.ellipsis),
+                ),
+                _cell(
+                  onTap: () => _openEditor(_recordAt(i)),
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    _recordAt(i).dailyIncome.toStringAsFixed(2),
+                    style: TextStyle(color: _incomeColor(_recordAt(i).dailyIncome)),
+                  ),
+                ),
+                _cell(
+                  onTap: () => _openEditor(_recordAt(i)),
+                  alignment: Alignment.centerRight,
+                  child: Text(_cumulativeAt(sorted, i).toStringAsFixed(2),
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: _incomeColor(_cumulativeAt(sorted, i)))),
+                ),
+              ],
             ),
-            _cell(
-              onTap: () => _openEditor(r),
-              child: Text(
-                  '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')}'),
-            ),
-            _cell(
-              onTap: () => _openEditor(r),
-              alignment: Alignment.centerRight,
-              child: Text(
-                r.dailyIncome.toStringAsFixed(2),
-                style: TextStyle(color: _incomeColor(r.dailyIncome)),
-              ),
-            ),
-            _cell(
-              onTap: () => _openEditor(r),
-              alignment: Alignment.centerRight,
-              child: Text(total.toStringAsFixed(2),
-                  style:
-                      TextStyle(fontWeight: FontWeight.bold, color: _incomeColor(total))),
-            ),
-          ],
-        );
+        ],
+      ));
+    }
 
-    return Table(
-      border: TableBorder.all(color: borderColor),
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      columnWidths: const {
-        0: FlexColumnWidth(3),
-        1: FlexColumnWidth(3),
-        2: FlexColumnWidth(2),
-        3: FlexColumnWidth(2),
-      },
-      children: [
-        headerRow(),
-        for (var i = 0; i < shown.length; i++) dataRow(shown[i], cumulative[offset + i]),
-      ],
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(children: children),
     );
   }
 
