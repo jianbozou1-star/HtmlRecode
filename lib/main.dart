@@ -27,28 +27,19 @@ class IncomeTablePage extends StatefulWidget {
   State<IncomeTablePage> createState() => _IncomeTablePageState();
 }
 
-class _IncomeTablePageState extends State<IncomeTablePage>
-    with SingleTickerProviderStateMixin {
+class _IncomeTablePageState extends State<IncomeTablePage> {
   final GitHubStore _store = GitHubStore();
   List<IncomeRecord> _records = [];
   bool _loading = true;
   String? _error;
+  int _tabIndex = 0;
   static const int _pageSize = 10;
   int _shown = _pageSize;
-
-  late final TabController _tab = TabController(length: 2, vsync: this);
 
   @override
   void initState() {
     super.initState();
-    _tab.addListener(() => setState(() {}));
     _init();
-  }
-
-  @override
-  void dispose() {
-    _tab.dispose();
-    super.dispose();
   }
 
   Future<void> _init() async {
@@ -174,61 +165,51 @@ class _IncomeTablePageState extends State<IncomeTablePage>
 
   @override
   Widget build(BuildContext context) {
-    final showFab = _tab.index == 0;
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_store.phone == null || _store.phone!.isEmpty
-              ? '记事本'
-              : '记事本 · ${_store.phone}'),
-          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-          actions: [
-            IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
-          ],
-          bottom: TabBar(
-            controller: _tab,
-            tabs: const [Tab(text: '表格'), Tab(text: '统计')],
-          ),
-        ),
-        body: _buildBody(),
-        floatingActionButton: showFab
-            ? FloatingActionButton(
-                onPressed: _addRow,
-                tooltip: '添加一行',
-                child: const Icon(Icons.add),
-              )
-            : null,
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_store.phone == null || _store.phone!.isEmpty
+            ? '记事本'
+            : '记事本 · ${_store.phone}'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
+        ],
+      ),
+      body: _buildBody(),
+      floatingActionButton: _tabIndex == 0
+          ? FloatingActionButton(
+              onPressed: _addRow,
+              tooltip: '添加一行',
+              child: const Icon(Icons.add),
+            )
+          : null,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (i) => setState(() => _tabIndex = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.table_chart_outlined), selectedIcon: Icon(Icons.table_chart), label: '编辑表格'),
+          NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart), label: '收益统计'),
+        ],
       ),
     );
   }
 
   Widget _buildBody() {
     if (_loading) {
-      return const TabBarView(children: [
-        Center(child: CircularProgressIndicator()),
-        Center(child: CircularProgressIndicator()),
-      ]);
+      return _tabIndex == 0
+          ? const Center(child: CircularProgressIndicator())
+          : const Center(child: CircularProgressIndicator());
     }
     if (!_store.phoneBound) {
-      return const TabBarView(children: [Center(child: Text('请先绑定手机号')), SizedBox()]);
+      return const Center(child: Text('请先绑定手机号'));
     }
     if (!AppConfig.tokenConfigured) {
-      return const TabBarView(children: [
-        Center(child: Text('服务端 Token 未配置，暂无法读取数据')),
-        SizedBox(),
-      ]);
+      return const Center(child: Text('服务端 Token 未配置，暂无法读取数据'));
     }
     if (_error != null) {
-      return TabBarView(children: [
-        Center(child: Text('加载失败：$_error', textAlign: TextAlign.center)),
-        Center(child: Text('加载失败：$_error', textAlign: TextAlign.center)),
-      ]);
+      return Center(child: Text('加载失败：$_error', textAlign: TextAlign.center));
     }
-    return TabBarView(children: [
-      _buildTableTab(),
-      _buildStatsTab(),
-    ]);
+    return _tabIndex == 0 ? _buildTableTab() : _buildStatsTab();
   }
 
   // ==================== Tab 1：表格 ====================
