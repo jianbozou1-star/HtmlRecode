@@ -20,8 +20,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-enum _Period { month, year, all }
-
 class IncomeTablePage extends StatefulWidget {
   const IncomeTablePage({super.key});
 
@@ -29,19 +27,28 @@ class IncomeTablePage extends StatefulWidget {
   State<IncomeTablePage> createState() => _IncomeTablePageState();
 }
 
-class _IncomeTablePageState extends State<IncomeTablePage> {
+class _IncomeTablePageState extends State<IncomeTablePage>
+    with SingleTickerProviderStateMixin {
   final GitHubStore _store = GitHubStore();
   List<IncomeRecord> _records = [];
   bool _loading = true;
   String? _error;
-  _Period _period = _Period.month;
   static const int _pageSize = 10;
   int _shown = _pageSize;
+
+  late final TabController _tab = TabController(length: 2, vsync: this);
 
   @override
   void initState() {
     super.initState();
+    _tab.addListener(() => setState(() {}));
     _init();
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
   }
 
   Future<void> _init() async {
@@ -56,7 +63,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     await _refresh();
   }
 
-  /// 绑定手机号（首次进入必须绑定，不弹框就无法继续）。
+  /// 绑定手机号（首次进入必须绑定）。
   Future<void> _bindPhone() async {
     final controller = TextEditingController();
     await showDialog<String>(
@@ -108,28 +115,6 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     }
   }
 
-  /// 当前周期内的记录（按时间升序）。
-  List<IncomeRecord> get _periodRecords {
-    final now = DateTime.now();
-    bool inPeriod(IncomeRecord r) {
-      switch (_period) {
-        case _Period.month:
-          return r.date.year == now.year && r.date.month == now.month;
-        case _Period.year:
-          return r.date.year == now.year;
-        case _Period.all:
-          return true;
-      }
-    }
-
-    final list = _records.where(inPeriod).toList()
-      ..sort((a, b) => a.date.compareTo(b.date));
-    return list;
-  }
-
-  double get _periodTotal =>
-      _periodRecords.fold(0, (sum, r) => sum + r.dailyIncome);
-
   void _showSnack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -157,7 +142,6 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     );
     if (result == null) return;
     if (result.deleted) {
-      // 在编辑页删除
       final records = List<IncomeRecord>.from(_records)
         ..removeWhere((r) => r.id == result.deletedId);
       setState(() => _records = records);
@@ -184,123 +168,111 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
     }
   }
 
-  String get _periodLabel {
-    switch (_period) {
-      case _Period.month:
-        return '本月';
-      case _Period.year:
-        return '本年';
-      case _Period.all:
-        return '全部';
-    }
-  }
+  /// 收益金额颜色：正数红色，负数绿色（用户要求）。
+  Color _incomeColor(double v) =>
+      v >= 0 ? Colors.red.shade700 : Colors.green.shade700;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_store.phone == null || _store.phone!.isEmpty
-            ? '记事本'
-            : '记事本 · ${_store.phone}'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
-        ],
-      ),
-      body: _buildBody(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _addRow,
-        tooltip: '添加一行',
-        child: const Icon(Icons.add),
+    final showFab = _tab.index == 0;
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_store.phone == null || _store.phone!.isEmpty
+              ? '记事本'
+              : '记事本 · ${_store.phone}'),
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+          actions: [
+            IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
+          ],
+          bottom: TabBar(
+            controller: _tab,
+            tabs: const [Tab(text: '表格'), Tab(text: '统计')],
+          ),
+        ),
+        body: _buildBody(),
+        floatingActionButton: showFab
+            ? FloatingActionButton(
+                onPressed: _addRow,
+                tooltip: '添加一行',
+                child: const Icon(Icons.add),
+              )
+            : null,
       ),
     );
   }
 
   Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-    if (!_store.phoneBound) return const Center(child: Text('请先绑定手机号'));
-    if (!AppConfig.tokenConfigured) {
-      return const Center(child: Text('服务端 Token 未配置，暂无法读取数据'));
+    if (_loading) {
+      return const TabBarView(children: [
+        Center(child: CircularProgressIndicator()),
+        Center(child: CircularProgressIndicator()),
+      ]);
     }
-    if (_error != null) return Center(child: Text('加载失败：$_error', textAlign: TextAlign.center));
+    if (!_store.phoneBound) {
+      return const TabBarView(children: [Center(child: Text('请先绑定手机号')), SizedBox()]);
+    }
+    if (!AppConfig.tokenConfigured) {
+      return const TabBarView(children: [
+        Center(child: Text('服务端 Token 未配置，暂无法读取数据')),
+        SizedBox(),
+      ]);
+    }
+    if (_error != null) {
+      return TabBarView(children: [
+        Center(child: Text('加载失败：$_error', textAlign: TextAlign.center)),
+        Center(child: Text('加载失败：$_error', textAlign: TextAlign.center)),
+      ]);
+    }
+    return TabBarView(children: [
+      _buildTableTab(),
+      _buildStatsTab(),
+    ]);
+  }
 
-    final all = _periodRecords;
-    // 最近 10 条（默认），可展开更多
-    final shownCount = _shown.clamp(0, all.length);
-    final shown = all.length <= _shown
-        ? all
-        : all.sublist(all.length - shownCount);
-    // 逐行累计（从周期开始累计）
+  // ==================== Tab 1：表格 ====================
+
+  Widget _buildTableTab() {
+    final sorted = List<IncomeRecord>.from(_records)
+      ..sort((a, b) => a.date.compareTo(b.date));
+    // 逐行累计总收益
     double running = 0;
     final cumulative = <double>[];
-    for (final r in all) {
+    for (final r in sorted) {
       running += r.dailyIncome;
       cumulative.add(running);
     }
-    final offset = all.length - shown.length;
+    final shownCount = _shown.clamp(0, sorted.length);
+    final shown = sorted.length <= _shown
+        ? sorted
+        : sorted.sublist(sorted.length - shownCount);
+    final offset = sorted.length - shown.length;
 
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
-          // 周期切换
-          SegmentedButton<_Period>(
-            segments: const [
-              ButtonSegment(value: _Period.month, label: Text('按月')),
-              ButtonSegment(value: _Period.year, label: Text('按年')),
-              ButtonSegment(value: _Period.all, label: Text('全部')),
-            ],
-            selected: {_period},
-            onSelectionChanged: (s) => setState(() {
-              _period = s.first;
-              _shown = _pageSize;
-            }),
-          ),
-          const SizedBox(height: 8),
-          _buildTable(shown, cumulative, offset, all),
-          if (all.length > _shown)
+          _buildTable(shown, cumulative, offset),
+          if (sorted.length > _shown)
             TextButton(
               onPressed: () => setState(() => _shown += _pageSize),
-              child: Text('显示更多（共 ${all.length} 条，当前显示最近 $shownCount 条）'),
+              child: Text('显示更多（共 ${sorted.length} 条，当前显示最近 $shownCount 条）'),
             ),
-          const SizedBox(height: 8),
-          // 周期统计
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              border: Border.all(color: Theme.of(context).colorScheme.outline),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Text('$_periodLabel收益统计：',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                const Spacer(),
-                Text(
-                  _periodTotal.toStringAsFixed(2),
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                    color: _periodTotal >= 0 ? Colors.green.shade700 : Colors.red.shade700,
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 
-  /// xlsx 风格表格：全边框网格。
-  Widget _buildTable(
-      List<IncomeRecord> shown, List<double> cumulative, int offset, List<IncomeRecord> all) {
+  /// xlsx 风格表格：全边框网格，点击单元格进入编辑页。
+  Widget _buildTable(List<IncomeRecord> shown, List<double> cumulative, int offset) {
     const headerStyle = TextStyle(fontWeight: FontWeight.bold);
     final borderColor = Theme.of(context).colorScheme.outlineVariant;
 
     TableRow headerRow() => TableRow(
-          decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest),
+          decoration:
+              BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest),
           children: ['名称', '时间', '当日收益', '总收益']
               .map((h) => Padding(
                     padding: const EdgeInsets.all(8),
@@ -325,14 +297,15 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
               alignment: Alignment.centerRight,
               child: Text(
                 r.dailyIncome.toStringAsFixed(2),
-                style: TextStyle(
-                    color: r.dailyIncome >= 0 ? Colors.green.shade700 : Colors.red.shade700),
+                style: TextStyle(color: _incomeColor(r.dailyIncome)),
               ),
             ),
             _cell(
               onTap: () => _openEditor(r),
               alignment: Alignment.centerRight,
-              child: Text(total.toStringAsFixed(2), style: const TextStyle(fontWeight: FontWeight.bold)),
+              child: Text(total.toStringAsFixed(2),
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold, color: _incomeColor(total))),
             ),
           ],
         );
@@ -348,8 +321,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
       },
       children: [
         headerRow(),
-        for (var i = 0; i < shown.length; i++)
-          dataRow(shown[i], cumulative[offset + i]),
+        for (var i = 0; i < shown.length; i++) dataRow(shown[i], cumulative[offset + i]),
       ],
     );
   }
@@ -367,6 +339,134 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
         constraints: const BoxConstraints(minHeight: 44),
         child: child,
       ),
+    );
+  }
+
+  // ==================== Tab 2：统计 ====================
+
+  Widget _buildStatsTab() {
+    return _StatsView(records: _records, incomeColor: _incomeColor);
+  }
+}
+
+/// 统计页：按月 / 按年切换，显示各周期总收益。
+class _StatsView extends StatefulWidget {
+  final List<IncomeRecord> records;
+  final Color Function(double) incomeColor;
+
+  const _StatsView({required this.records, required this.incomeColor});
+
+  @override
+  State<_StatsView> createState() => _StatsViewState();
+}
+
+class _StatsViewState extends State<_StatsView> {
+  bool _byMonth = true; // true=按月, false=按年
+
+  /// 按周期分组（倒序），返回 (周期名, 总收益, 记录数)。
+  List<(String, double, int)> get _groups {
+    final map = <String, double>{};
+    final count = <String, int>{};
+    for (final r in widget.records) {
+      final key = _byMonth
+          ? '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}'
+          : '${r.date.year}';
+      map[key] = (map[key] ?? 0) + r.dailyIncome;
+      count[key] = (count[key] ?? 0) + 1;
+    }
+    final keys = map.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [for (final k in keys) (k, map[k]!, count[k]!)];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = _groups;
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(value: true, label: Text('按月')),
+            ButtonSegment(value: false, label: Text('按年')),
+          ],
+          selected: {_byMonth},
+          onSelectionChanged: (s) => setState(() => _byMonth = s.first),
+        ),
+        const SizedBox(height: 12),
+        if (groups.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: Text('暂无数据')),
+          )
+        else ...[
+          // 表头
+          Container(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(children: [
+              Expanded(
+                  flex: 3,
+                  child: Text(_byMonth ? '月份' : '年份',
+                      style: const TextStyle(fontWeight: FontWeight.bold))),
+              const Expanded(
+                  flex: 2,
+                  child: Text('笔数',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center)),
+              const Expanded(
+                  flex: 3,
+                  child: Text('总收益',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.right)),
+            ]),
+          ),
+          ...groups.map((g) {
+            final (period, total, n) = g;
+            return Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Theme.of(context).dividerColor),
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(children: [
+                Expanded(flex: 3, child: Text(period)),
+                Expanded(flex: 2, child: Text('$n', textAlign: TextAlign.center)),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    total.toStringAsFixed(2),
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: widget.incomeColor(total),
+                    ),
+                  ),
+                ),
+              ]),
+            );
+          }),
+          const SizedBox(height: 12),
+          // 全部合计
+          Row(
+            children: [
+              const Spacer(),
+              const Text('全部合计：',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              Text(
+                widget.records.fold<double>(0, (s, r) => s + r.dailyIncome)
+                    .toStringAsFixed(2),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 17,
+                  color: widget.incomeColor(
+                      widget.records.fold<double>(0, (s, r) => s + r.dailyIncome)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }
@@ -416,8 +516,8 @@ class _RecordEditPageState extends State<RecordEditPage> {
             onPressed: () {
               final income = double.tryParse(_income.text.trim());
               if (income == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('当日收益必须是数字')));
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('当日收益必须是数字')));
                 return;
               }
               Navigator.pop(
