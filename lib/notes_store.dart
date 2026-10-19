@@ -1,43 +1,9 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// GitHub 配置（owner/repo/token/path），持久化到浏览器 localStorage。
-class GitHubConfig {
-  final String owner;
-  final String repo;
-  final String token;
-  final String path; // 仓库内数据文件路径，默认 notes.json
-  final String branch;
-
-  const GitHubConfig({
-    required this.owner,
-    required this.repo,
-    required this.token,
-    this.path = 'notes.json',
-    this.branch = 'main',
-  });
-
-  bool get isComplete => owner.isNotEmpty && repo.isNotEmpty && token.isNotEmpty;
-
-  Map<String, dynamic> toJson() => {
-        'owner': owner,
-        'repo': repo,
-        'token': token,
-        'path': path,
-        'branch': branch,
-      };
-
-  static GitHubConfig fromJson(Map<String, dynamic> j) => GitHubConfig(
-        owner: j['owner'] ?? '',
-        repo: j['repo'] ?? '',
-        token: j['token'] ?? '',
-        path: (j['path']?.isEmpty ?? true) ? 'notes.json' : j['path'],
-        branch: (j['branch']?.isEmpty ?? true) ? 'main' : j['branch'],
-      );
-}
+import 'app_config.dart';
 
 /// 一条记事。
 class Note {
@@ -87,161 +53,141 @@ class IncomeRecord {
       );
 }
 
+/// GitHub 存储：数据按绑定的手机号隔离，存于 data/<手机号>/ 目录。
 class GitHubStore {
-  static const _configKey = 'gh_config';
-  static const _cacheKey = 'notes_cache';
+  static const _phoneKey = 'bound_phone';
+  static const _notesCacheKey = 'notes_cache';
   static const _tableCacheKey = 'table_cache';
 
-  GitHubConfig? _config;
-  GitHubConfig? get config => _config;
+  String? _phone;
+  String? get phone => _phone;
 
-  /// 本地缓存的记事（离线可读，无 token 时也能看）。
-  List<Note> _localNotes = [];
-  List<Note> get localNotes => List.unmodifiable(_localNotes);
+  /// 是否已绑定手机号且 Token 已配置。
+  bool get isReady => (_phone?.isNotEmpty ?? false) && AppConfig.tokenConfigured;
 
-  List<IncomeRecord> _localTable = [];
-  List<IncomeRecord> get localTable => List.unmodifiable(_localTable);
+  bool get phoneBound => _phone?.isNotEmpty ?? false;
+
+  String get _baseDir => 'data/$_phone';
 
   Future<void> loadLocal() async {
     final sp = await SharedPreferences.getInstance();
-    final cfg = sp.getString(_configKey);
-    if (cfg != null) {
-      _config = GitHubConfig.fromJson(jsonDecode(cfg) as Map<String, dynamic>);
-    }
-    final cache = sp.getString(_cacheKey);
+    _phone = sp.getString(_phoneKey);
+    final cache = sp.getString(_notesCacheKey);
     if (cache != null) {
       final list = jsonDecode(cache) as List;
-      _localNotes = list.map((e) => Note.fromJson(e as Map<String, dynamic>)).toList()
+      _notesCache = list.map((e) => Note.fromJson(e as Map<String, dynamic>)).toList()
         ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     }
     final tcache = sp.getString(_tableCacheKey);
     if (tcache != null) {
       final list = jsonDecode(tcache) as List;
-      _localTable = list.map((e) => IncomeRecord.fromJson(e as Map<String, dynamic>)).toList()
+      _tableCache = list.map((e) => IncomeRecord.fromJson(e as Map<String, dynamic>)).toList()
         ..sort((a, b) => a.date.compareTo(b.date));
     }
   }
 
-  Future<void> saveConfig(GitHubConfig config) async {
-    _config = config;
+  /// 绑定手机号（仅存浏览器本地，用于隔离数据目录）。
+  Future<void> bindPhone(String phone) async {
+    _phone = phone.trim();
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_configKey, jsonEncode(config.toJson()));
+    await sp.setString(_phoneKey, _phone!);
+    // 换号后清空本地缓存，避免显示他人数据
+    _notesCache = [];
+    _tableCache = [];
+    await sp.remove(_notesCacheKey);
+    await sp.remove(_tableCacheKey);
   }
 
+  List<Note> _notesCache = [];
+  List<Note> get localNotes => List.unmodifiable(_notesCache);
+
+  List<IncomeRecord> _tableCache = [];
+  List<IncomeRecord> get localTable => List.unmodifiable(_tableCache);
+
   Future<void> _cacheNotes(List<Note> notes) async {
-    _localNotes = notes..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    _notesCache = notes..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_cacheKey, jsonEncode(_localNotes.map((n) => n.toJson()).toList()));
+    await sp.setString(_notesCacheKey, jsonEncode(_notesCache.map((n) => n.toJson()).toList()));
   }
 
   Future<void> _cacheTable(List<IncomeRecord> records) async {
-    _localTable = records..sort((a, b) => a.date.compareTo(b.date));
+    _tableCache = records..sort((a, b) => a.date.compareTo(b.date));
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_tableCacheKey, jsonEncode(_localTable.map((r) => r.toJson()).toList()));
+    await sp.setString(_tableCacheKey, jsonEncode(_tableCache.map((r) => r.toJson()).toList()));
   }
+
+  Map<String, String> get _headers => {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': 'Bearer ${AppConfig.token}',
+      };
 
   Uri _api(String p) => Uri.parse('https://api.github.com$p');
 
-  Map<String, String> _headers({bool withAuth = true}) => {
-        'Accept': 'application/vnd.github+json',
-        if (withAuth && _config!.token.isNotEmpty) 'Authorization': 'Bearer ${_config!.token}',
-      };
-
-  /// 从 GitHub 拉取 notes.json。返回最新记事列表。
-  Future<List<Note>> fetchNotes() async {
-    final c = _config!;
-    final uri = _api('/repos/${c.owner}/${c.repo}/contents/${c.path}?ref=${c.branch}');
-    final resp = await http.get(uri, headers: _headers());
-    if (resp.statusCode == 404) {
-      // 文件不存在，视为空数据
-      await _cacheNotes([]);
-      return [];
-    }
+  Future<dynamic> _fetchJson(String filePath) async {
+    final uri = _api('/repos/${AppConfig.owner}/${AppConfig.repo}/contents/$filePath?ref=${AppConfig.branch}');
+    final resp = await http.get(uri, headers: _headers);
+    if (resp.statusCode == 404) return null;
     if (resp.statusCode != 200) {
       throw Exception('GitHub 读取失败 (${resp.statusCode}): ${resp.body}');
     }
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     final content = body['content'] as String? ?? '';
-    final decoded = utf8.decode(base64Decode(content.replaceAll('\n', '')));
-    final list = jsonDecode(decoded) as List;
-    final notes = list.map((e) => Note.fromJson(e as Map<String, dynamic>)).toList();
+    return jsonDecode(utf8.decode(base64Decode(content.replaceAll('\n', ''))));
+  }
+
+  Future<void> _saveJson(String filePath, List<Map<String, dynamic>> items, String message) async {
+    final uri = _api('/repos/${AppConfig.owner}/${AppConfig.repo}/contents/$filePath');
+    // 取当前 sha（存在则更新）
+    String? sha;
+    final head = await http.get(uri, headers: _headers);
+    if (head.statusCode == 200) {
+      sha = (jsonDecode(head.body) as Map<String, dynamic>)['sha'] as String?;
+    }
+    final jsonStr = const JsonEncoder.withIndent('  ').convert(items);
+    final resp = await http.put(
+      uri,
+      headers: _headers,
+      body: jsonEncode({
+        'message': '$message ${DateTime.now().toIso8601String()}',
+        'content': base64Encode(utf8.encode(jsonStr)),
+        'branch': AppConfig.branch,
+        if (sha != null) 'sha': sha,
+      }),
+    );
+    if (resp.statusCode != 200 && resp.statusCode != 201) {
+      throw Exception('GitHub 写入失败 (${resp.statusCode}): ${resp.body}');
+    }
+  }
+
+  /// 从 GitHub 拉取当前手机号的 notes.json。
+  Future<List<Note>> fetchNotes() async {
+    final data = await _fetchJson('$_baseDir/notes.json');
+    final notes = data == null
+        ? <Note>[]
+        : (data as List).map((e) => Note.fromJson(e as Map<String, dynamic>)).toList();
     await _cacheNotes(notes);
     return notes;
   }
 
-  /// 全量保存记事列表（写入 notes.json，一次提交）。
+  /// 全量保存当前手机号的记事列表。
   Future<void> saveNotes(List<Note> notes) async {
-    final c = _config!;
-    final uri = _api('/repos/${c.owner}/${c.repo}/contents/${c.path}');
-    // 取当前 sha（存在则更新）
-    String? sha;
-    final head = await http.get(uri, headers: _headers());
-    if (head.statusCode == 200) {
-      sha = (jsonDecode(head.body) as Map<String, dynamic>)['sha'] as String?;
-    }
-    final jsonStr = const JsonEncoder.withIndent('  ')
-        .convert(notes.map((n) => n.toJson()).toList());
-    final resp = await http.put(
-      uri,
-      headers: _headers(),
-      body: jsonEncode({
-        'message': 'update notes ${DateTime.now().toIso8601String()}',
-        'content': base64Encode(utf8.encode(jsonStr)),
-        'branch': c.branch,
-        if (sha != null) 'sha': sha,
-      }),
-    );
-    if (resp.statusCode != 200 && resp.statusCode != 201) {
-      throw Exception('GitHub 写入失败 (${resp.statusCode}): ${resp.body}');
-    }
+    await _saveJson('$_baseDir/notes.json', notes.map((n) => n.toJson()).toList(), 'update notes');
     await _cacheNotes(notes);
   }
 
-  /// 从 GitHub 拉取收益表 table.json。
+  /// 从 GitHub 拉取当前手机号的 table.json。
   Future<List<IncomeRecord>> fetchTable() async {
-    final c = _config!;
-    final uri = _api('/repos/${c.owner}/${c.repo}/contents/table.json?ref=${c.branch}');
-    final resp = await http.get(uri, headers: _headers());
-    if (resp.statusCode == 404) {
-      await _cacheTable([]);
-      return [];
-    }
-    if (resp.statusCode != 200) {
-      throw Exception('GitHub 读取失败 (${resp.statusCode}): ${resp.body}');
-    }
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
-    final content = body['content'] as String? ?? '';
-    final decoded = utf8.decode(base64Decode(content.replaceAll('\n', '')));
-    final list = jsonDecode(decoded) as List;
-    final records = list.map((e) => IncomeRecord.fromJson(e as Map<String, dynamic>)).toList();
+    final data = await _fetchJson('$_baseDir/table.json');
+    final records = data == null
+        ? <IncomeRecord>[]
+        : (data as List).map((e) => IncomeRecord.fromJson(e as Map<String, dynamic>)).toList();
     await _cacheTable(records);
     return records;
   }
 
-  /// 全量保存收益表到 table.json。
+  /// 全量保存当前手机号的收益表。
   Future<void> saveTable(List<IncomeRecord> records) async {
-    final c = _config!;
-    final uri = _api('/repos/${c.owner}/${c.repo}/contents/table.json');
-    String? sha;
-    final head = await http.get(uri, headers: _headers());
-    if (head.statusCode == 200) {
-      sha = (jsonDecode(head.body) as Map<String, dynamic>)['sha'] as String?;
-    }
-    final jsonStr = const JsonEncoder.withIndent('  ')
-        .convert(records.map((r) => r.toJson()).toList());
-    final resp = await http.put(
-      uri,
-      headers: _headers(),
-      body: jsonEncode({
-        'message': 'update table ${DateTime.now().toIso8601String()}',
-        'content': base64Encode(utf8.encode(jsonStr)),
-        'branch': c.branch,
-        if (sha != null) 'sha': sha,
-      }),
-    );
-    if (resp.statusCode != 200 && resp.statusCode != 201) {
-      throw Exception('GitHub 写入失败 (${resp.statusCode}): ${resp.body}');
-    }
+    await _saveJson('$_baseDir/table.json', records.map((r) => r.toJson()).toList(), 'update table');
     await _cacheTable(records);
   }
 }

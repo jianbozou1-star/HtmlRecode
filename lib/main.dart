@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_config.dart';
 import 'notes_store.dart';
 
 void main() {
@@ -73,14 +74,55 @@ class _NotesHomePageState extends State<NotesHomePage> {
       _notes = _store.localNotes;
       _loading = false;
     });
+    if (!_store.phoneBound) {
+      await _bindPhone();
+    }
     await _refresh();
   }
 
-  Future<void> _refresh() async {
-    if (_store.config == null || !_store.config!.isComplete) {
-      _showSnack('尚未配置 GitHub，请在右上角设置中填写');
-      return;
+  /// 绑定/换绑手机号。
+  Future<void> _bindPhone() async {
+    final controller = TextEditingController(text: _store.phone ?? '');
+    final phone = await showDialog<String>(
+      context: context,
+      barrierDismissible: _store.phoneBound,
+      builder: (context) => PopScope(
+        canPop: _store.phoneBound,
+        child: AlertDialog(
+          title: const Text('绑定手机号'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.phone,
+            maxLength: 11,
+            decoration: const InputDecoration(
+              labelText: '手机号',
+              helperText: '数据将按手机号隔离存储与读取',
+            ),
+          ),
+          actions: [
+            if (_store.phoneBound)
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            FilledButton(
+              onPressed: () {
+                final p = controller.text.trim();
+                if (p.length == 11) Navigator.pop(context, p);
+              },
+              child: const Text('绑定'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (phone != null) {
+      await _store.bindPhone(phone);
+      if (mounted) setState(() {});
+      await _refresh();
     }
+  }
+
+  Future<void> _refresh() async {
+    if (!_store.isReady) return;
     setState(() => _loading = true);
     try {
       final notes = await _store.fetchNotes();
@@ -124,8 +166,8 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 
   Future<void> _push(List<Note> notes) async {
-    if (_store.config == null || !_store.config!.isComplete) {
-      _showSnack('未配置 GitHub，数据仅保存在本地缓存');
+    if (!_store.isReady) {
+      _showSnack('未绑定手机号或 Token 未配置，数据仅保存在本地缓存');
       return;
     }
     try {
@@ -137,23 +179,24 @@ class _NotesHomePageState extends State<NotesHomePage> {
   }
 
   Future<void> _openSettings() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => SettingsPage(store: _store)),
-    );
-    await _refresh();
+    await _bindPhone();
   }
 
   @override
   Widget build(BuildContext context) {
-    final cfg = _store.config;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('GitHub 记事本'),
+        title: Text(_store.phone == null || _store.phone!.isEmpty
+            ? '记事本'
+            : '记事本 · ${_store.phone}'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh, tooltip: '刷新'),
-          IconButton(icon: const Icon(Icons.settings), onPressed: _openSettings, tooltip: '设置'),
+          IconButton(
+            icon: const Icon(Icons.phone_android),
+            onPressed: _openSettings,
+            tooltip: '换绑手机号',
+          ),
         ],
       ),
       body: _buildBody(),
@@ -161,12 +204,17 @@ class _NotesHomePageState extends State<NotesHomePage> {
         onPressed: () => _openEditor(),
         child: const Icon(Icons.add),
       ),
-      floatingActionButtonLocation: cfg == null || !cfg.isComplete ? FloatingActionButtonLocation.endTop : null,
     );
   }
 
   Widget _buildBody() {
     if (_loading) return const Center(child: CircularProgressIndicator());
+    if (!_store.phoneBound) {
+      return const Center(child: Text('请先绑定手机号（点击右上角手机图标）'));
+    }
+    if (!AppConfig.tokenConfigured) {
+      return const Center(child: Text('服务端 Token 未配置，暂无法读取数据'));
+    }
     if (_error != null) {
       return Center(child: Text('加载失败：$_error', textAlign: TextAlign.center));
     }
@@ -287,81 +335,6 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   }
 }
 
-class SettingsPage extends StatefulWidget {
-  final GitHubStore store;
-  const SettingsPage({super.key, required this.store});
-
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  late final TextEditingController _owner;
-  late final TextEditingController _repo;
-  late final TextEditingController _token;
-  late final TextEditingController _path;
-  late final TextEditingController _branch;
-
-  @override
-  void initState() {
-    super.initState();
-    final c = widget.store.config;
-    _owner = TextEditingController(text: c?.owner ?? '');
-    _repo = TextEditingController(text: c?.repo ?? '');
-    _token = TextEditingController(text: c?.token ?? '');
-    _path = TextEditingController(text: c?.path ?? 'notes.json');
-    _branch = TextEditingController(text: c?.branch ?? 'main');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('GitHub 设置'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.check),
-            onPressed: () async {
-              await widget.store.saveConfig(GitHubConfig(
-                owner: _owner.text.trim(),
-                repo: _repo.text.trim(),
-                token: _token.text.trim(),
-                path: _path.text.trim().isEmpty ? 'notes.json' : _path.text.trim(),
-                branch: _branch.text.trim().isEmpty ? 'main' : _branch.text.trim(),
-              ));
-              if (context.mounted) Navigator.pop(context);
-            },
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          TextField(controller: _owner, decoration: const InputDecoration(labelText: 'GitHub 用户名 (owner)')),
-          TextField(controller: _repo, decoration: const InputDecoration(labelText: '仓库名 (repo)')),
-          TextField(
-            controller: _token,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Personal Access Token（需 Contents 读写权限）',
-              helperText: '只保存在当前浏览器 localStorage，不会上传',
-            ),
-          ),
-          TextField(controller: _path, decoration: const InputDecoration(labelText: '数据文件路径')),
-          TextField(controller: _branch, decoration: const InputDecoration(labelText: '分支')),
-          const SizedBox(height: 16),
-          const Text(
-            'Token 创建方式：GitHub → Settings → Developer settings → '
-            'Fine-grained tokens，选择该仓库并授予 Contents: Read and write。',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class IncomeTablePage extends StatefulWidget {
   const IncomeTablePage({super.key});
 
@@ -391,7 +364,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   }
 
   Future<void> _refresh() async {
-    if (_store.config == null || !_store.config!.isComplete) return;
+    if (!_store.isReady) return;
     setState(() => _loading = true);
     try {
       final records = await _store.fetchTable();
@@ -449,8 +422,8 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   }
 
   Future<void> _push(List<IncomeRecord> records) async {
-    if (_store.config == null || !_store.config!.isComplete) {
-      _showSnack('未配置 GitHub，数据仅保存在本地缓存');
+    if (!_store.isReady) {
+      _showSnack('未绑定手机号或 Token 未配置，数据仅保存在本地缓存');
       return;
     }
     try {
@@ -482,6 +455,10 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
 
   Widget _buildBody(List<MapEntry<IncomeRecord, double>> rows) {
     if (_loading) return const Center(child: CircularProgressIndicator());
+    if (!_store.phoneBound) return const Center(child: Text('请先绑定手机号'));
+    if (!AppConfig.tokenConfigured) {
+      return const Center(child: Text('服务端 Token 未配置，暂无法读取数据'));
+    }
     if (_error != null) return Center(child: Text('加载失败：$_error', textAlign: TextAlign.center));
     if (rows.isEmpty) return const Center(child: Text('暂无记录，点右下角 + 新增'));
 
