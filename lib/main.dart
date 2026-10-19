@@ -353,17 +353,21 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
                 _cell(
                   onTap: () => _openEditor(_recordAt(i)),
                   alignment: Alignment.centerRight,
+                  background: _totalStyle(_recordAt(i).dailyIncome).bg,
                   child: Text(
                     _recordAt(i).dailyIncome.toStringAsFixed(2),
-                    style: TextStyle(color: _incomeColor(_recordAt(i).dailyIncome)),
+                    style: TextStyle(
+                        color: _totalStyle(_recordAt(i).dailyIncome).fg),
                   ),
                 ),
                 _cell(
                   onTap: () => _openEditor(_recordAt(i)),
                   alignment: Alignment.centerRight,
+                  background: _totalStyle(_recordAt(i).nextDayIncome).bg,
                   child: Text(
                     _recordAt(i).nextDayIncome.toStringAsFixed(2),
-                    style: TextStyle(color: _incomeColor(_recordAt(i).nextDayIncome)),
+                    style: TextStyle(
+                        color: _totalStyle(_recordAt(i).nextDayIncome).fg),
                   ),
                 ),
                 Builder(builder: (_) {
