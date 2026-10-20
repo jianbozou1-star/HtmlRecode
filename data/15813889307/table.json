@@ -3,12 +3,14 @@
     "id": "hncw4gwdvk",
     "name": "至纯科技",
     "date": "2026-10-19T21:04:48.488",
-    "dailyIncome": 2
+    "dailyIncome": 2,
+    "nextDayIncome": 2
   },
   {
     "id": "hncw4jnu4g",
     "name": "华北制药",
     "date": "2026-10-19T21:04:53.128",
-    "dailyIncome": -1
+    "dailyIncome": -1,
+    "nextDayIncome": 0
   }
 ]
