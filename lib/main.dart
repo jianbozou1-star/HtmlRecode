@@ -229,7 +229,8 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
   double _value(IncomeRecord r) => r.dailyIncome + r.nextDayIncome;
 
   /// 按天分组并计算全局逐行累计（单次计算，避免重复排序导致行序错乱）。
-  /// 返回 (天分组列表[日倒序，天内按时间升序], 每条记录 id 到累计总收益的映射)。
+  /// 天按日期倒序，天内记录按时间倒序；总收益仍按时间升序逐行累计（最新行数值最大）。
+  /// 返回 (天分组列表, 每条记录 id 到累计总收益的映射)。
   ({List<(String, List<IncomeRecord>)> days, Map<String, double> cumulative})
       _compute() {
     final sorted = List<IncomeRecord>.from(_records)
@@ -253,7 +254,8 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
       dayMap[key]!.add(r);
     }
     final days = <(String, List<IncomeRecord>)>[
-      for (final key in dayKeys.reversed) (key, dayMap[key]!),
+      // 天倒序，天内也倒序（最新在前）
+      for (final key in dayKeys.reversed) (key, dayMap[key]!.reversed.toList()),
     ];
     return (days: days, cumulative: cumulative);
   }
