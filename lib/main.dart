@@ -225,52 +225,42 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
 
   // ==================== Tab 1：表格 ====================
 
-  /// 按天分组（天倒序，最新的天在最上面）。
-  /// 返回 [(日期字符串, 该天的记录列表(升序), 全局累计到该行)]。
-  List<(String, List<int>)> _groupByDay() {
+  /// 一条记录的收益合计（当日 + 第二日），用于总收益累计。
+  double _value(IncomeRecord r) => r.dailyIncome + r.nextDayIncome;
+
+  /// 按天分组并计算全局逐行累计（单次计算，避免重复排序导致行序错乱）。
+  /// 返回 (天分组列表[日倒序，天内按时间升序], 每条记录 id 到累计总收益的映射)。
+  ({List<(String, List<IncomeRecord>)> days, Map<String, double> cumulative})
+      _compute() {
     final sorted = List<IncomeRecord>.from(_records)
-      ..sort((a, b) => a.date.compareTo(b.date));
-    // 全局逐行累计
+      ..sort((a, b) {
+        final c = a.date.compareTo(b.date);
+        return c != 0 ? c : a.id.compareTo(b.id);
+      });
     double running = 0;
     final cumulative = <String, double>{};
-    for (final r in sorted) {
-      running += r.dailyIncome;
-      cumulative[r.id] = running;
-    }
     final dayKeys = <String>[];
     final dayMap = <String, List<IncomeRecord>>{};
     for (final r in sorted) {
+      running += _value(r);
+      cumulative[r.id] = running;
       final key =
           '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')}';
-      dayMap.putIfAbsent(key, () => []).add(r);
-      if (!dayKeys.contains(key)) dayKeys.add(key);
+      if (!dayMap.containsKey(key)) {
+        dayMap[key] = [];
+        dayKeys.add(key);
+      }
+      dayMap[key]!.add(r);
     }
-    final result = <(String, List<int>)>[];
-    for (final key in dayKeys.reversed) {
-      final idxs = dayMap[key]!.map((r) => sorted.indexOf(r)).toList();
-      result.add((key, idxs));
-    }
-    return result;
-  }
-
-  IncomeRecord _recordAt(int i) {
-    final sorted = List<IncomeRecord>.from(_records)
-      ..sort((a, b) => a.date.compareTo(b.date));
-    return sorted[i];
-  }
-
-  double _cumulativeAt(List<IncomeRecord> sorted, int index) {
-    double total = 0;
-    for (var i = 0; i <= index; i++) {
-      total += sorted[i].dailyIncome;
-    }
-    return total;
+    final days = <(String, List<IncomeRecord>)>[
+      for (final key in dayKeys.reversed) (key, dayMap[key]!),
+    ];
+    return (days: days, cumulative: cumulative);
   }
 
   Widget _buildTableTab() {
-    final sorted = List<IncomeRecord>.from(_records)
-      ..sort((a, b) => a.date.compareTo(b.date));
-    final days = _groupByDay();
+    final computed = _compute();
+    final days = computed.days;
     // 仅首次自动展开最新的一天
     if (!_expandedInitialized && days.isNotEmpty) {
       _expandedDays.add(days.first.$1);
@@ -287,7 +277,8 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
               padding: EdgeInsets.all(32),
               child: Center(child: Text('暂无记录，点右下角 + 添加一行')),
             ),
-          ...days.map((day) => _buildDaySection(sorted, day.$1, day.$2)),
+          ...days
+              .map((day) => _buildDaySection(day.$1, day.$2, computed.cumulative)),
         ],
       ),
     );
@@ -295,10 +286,10 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
 
   /// 一天的折叠区块：标题栏（日期+当日合计+展开箭头）+ 内嵌表格。
   Widget _buildDaySection(
-      List<IncomeRecord> sorted, String day, List<int> idxs) {
+      String day, List<IncomeRecord> records, Map<String, double> cumulative) {
     final borderColor = Theme.of(context).colorScheme.outlineVariant;
-    final dayTotal = idxs.fold<double>(
-        0, (sum, i) => sum + _recordAt(i).dailyIncome);
+    final dayTotal =
+        records.fold<double>(0, (sum, r) => sum + _value(r));
     final expanded = _expandedDays.contains(day);
     const headerStyle = TextStyle(fontWeight: FontWeight.bold);
 
@@ -316,7 +307,7 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
             const SizedBox(width: 4),
             Text(day, style: headerStyle),
             const Spacer(),
-            Text('${idxs.length} 笔',
+            Text('${records.length} 笔',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
             const SizedBox(width: 12),
             Text(dayTotal.toStringAsFixed(2),
@@ -346,46 +337,42 @@ class _IncomeTablePageState extends State<IncomeTablePage> {
                     ))
                 .toList(),
           ),
-          for (final i in idxs)
+          for (final r in records)
             TableRow(
               children: [
                 _cell(
-                  onTap: () => _openEditor(_recordAt(i)),
-                  child: Text(_recordAt(i).name.isEmpty
-                      ? '-'
-                      : _recordAt(i).name,
+                  onTap: () => _openEditor(r),
+                  child: Text(r.name.isEmpty ? '-' : r.name,
                       overflow: TextOverflow.ellipsis),
                 ),
                 _cell(
-                  onTap: () => _openEditor(_recordAt(i)),
+                  onTap: () => _openEditor(r),
                   alignment: Alignment.centerRight,
-                  background: _totalStyle(_recordAt(i).dailyIncome).bg,
+                  background: _totalStyle(r.dailyIncome).bg,
                   child: Text(
-                    _recordAt(i).dailyIncome.toStringAsFixed(2),
-                    style: TextStyle(
-                        color: _totalStyle(_recordAt(i).dailyIncome).fg),
+                    r.dailyIncome.toStringAsFixed(2),
+                    style: TextStyle(color: _totalStyle(r.dailyIncome).fg),
                   ),
                 ),
                 _cell(
-                  onTap: () => _openEditor(_recordAt(i)),
+                  onTap: () => _openEditor(r),
                   alignment: Alignment.centerRight,
-                  background: _totalStyle(_recordAt(i).nextDayIncome).bg,
+                  background: _totalStyle(r.nextDayIncome).bg,
                   child: Text(
-                    _recordAt(i).nextDayIncome.toStringAsFixed(2),
-                    style: TextStyle(
-                        color: _totalStyle(_recordAt(i).nextDayIncome).fg),
+                    r.nextDayIncome.toStringAsFixed(2),
+                    style: TextStyle(color: _totalStyle(r.nextDayIncome).fg),
                   ),
                 ),
                 Builder(builder: (_) {
-                  final total = _cumulativeAt(sorted, i);
+                  final total = cumulative[r.id] ?? 0;
                   final s = _totalStyle(total);
                   return _cell(
-                    onTap: () => _openEditor(_recordAt(i)),
+                    onTap: () => _openEditor(r),
                     alignment: Alignment.centerRight,
                     background: s.bg,
                     child: Text(total.toStringAsFixed(2),
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, color: s.fg)),
+                        style:
+                            TextStyle(fontWeight: FontWeight.bold, color: s.fg)),
                   );
                 }),
               ],
@@ -457,7 +444,8 @@ class _StatsViewState extends State<_StatsView> {
       final key = _byMonth
           ? '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}'
           : '${r.date.year}';
-      map[key] = (map[key] ?? 0) + r.dailyIncome;
+      map[key] =
+          (map[key] ?? 0) + r.dailyIncome + r.nextDayIncome;
       count[key] = (count[key] ?? 0) + 1;
     }
     final keys = map.keys.toList()..sort((a, b) => b.compareTo(a));
@@ -544,7 +532,8 @@ class _StatsViewState extends State<_StatsView> {
           const SizedBox(height: 12),
           // 全部合计
           Builder(builder: (_) {
-            final grand = widget.records.fold<double>(0, (s, r) => s + r.dailyIncome);
+            final grand = widget.records
+                .fold<double>(0, (s, r) => s + r.dailyIncome + r.nextDayIncome);
             final s = widget.totalStyle(grand);
             return Container(
               margin: const EdgeInsets.only(left: 100),
